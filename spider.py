@@ -11,7 +11,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.common.by import By
-from config import BROWSERMOBPROXYPATH, PHANTOMJSPATH, HEADERS, URLSUFFIXLIST, AUTHURL, BASEURL, INDEXURL, LOGINURL, MAINSUFFIXLIST, FORBIDDENELEMENTLIST, FORBIDDENURLLIST, PROXYSETTINGS, JSINTERCEPTOR
+from config import BROWSERMOBPROXYPATH, PHANTOMJSPATH, HEADERS, URLSUFFIXLIST, AUTHURL, BASEURL, INDEXURL, LOGINURL, MAINSUFFIXLIST, FORBIDDENELEMENTLIST, FORBIDDENURLLIST, PROXYSETTINGS, JSINTERCEPTOR, STRTOFILL
 
 
 class RouterSpider:
@@ -24,17 +24,18 @@ class RouterSpider:
         self.proxy = self.server.create_proxy()
         self.proxy.add_to_capabilities(webdriver.DesiredCapabilities.PHANTOMJS)
         dcap = dict(webdriver.DesiredCapabilities.PHANTOMJS)
-        dcap["phantomjs.page.settings.resourceTimeout"] = 5000
         dcap["phantomjs.page.settings.loadImages"] = False
+        dcap["phantomjs.page.settings.javascriptEnabled"] = True
         self.browser = webdriver.PhantomJS(executable_path=PHANTOMJSPATH, desired_capabilities=dcap)
+        self.browser.maximize_window()
         self.browser.set_page_load_timeout(10)
         self.requests_session = requests.session()
 
-    # 路由器厂商自己写的登录界面，account：账号，password：密码，account_field_xpath：账号输入框的xpath，password_field_xpath：密码输入框的xpath
-    # 如果路由器登录后会在URL中添加字段，可以加入pattern，使用正则提取该字段
+    # 路由器厂商自己写的登录界面
+    # account：账号，password：密码，account_field_xpath：账号输入框的xpath，password_field_xpath：密码输入框的xpath
+    # 如果路由器登录后会在URL中添加字段用于验证，可以加入pattern，使用正则提取该字段
     def webdriver_login(self, password, password_field_xpath, login_button_xpath, account=None, account_field_xpath=None, pattern=None):
         self.browser.get(LOGINURL)
-        time.sleep(2)
         if account_field_xpath is not None:
             try:
                 self.browser.find_element_by_xpath(account_field_xpath).send_keys(account)
@@ -48,7 +49,6 @@ class RouterSpider:
             self.browser.find_element_by_xpath(login_button_xpath).click()
         except:
             logging.error('Cannot locate login button.')
-        time.sleep(5)
         logging.debug('Login complete.')
         if pattern is not None:
             auth = re.findall(pattern, self.browser.current_url)
@@ -59,6 +59,7 @@ class RouterSpider:
         self.browser.get(AUTHURL)
         logging.debug('Login complete.')
 
+    # 递归提取路由器后台中的所有URL
     # 路由器登陆后http headers中有"Authorization"字段，例如headers = {"Authorization":"Basic YWRtaW46cGFzc3dvcmQ="}
     # pattern用来提取前缀，例如http://192.168.1.1/start.html中的start
     def extract_urls_with_auth_headers(self, pattern, target_url=None):
@@ -73,6 +74,7 @@ class RouterSpider:
                     self.main_urls.append(url)
                 self.extract_urls_with_auth_headers(pattern, target_url=url)
 
+    # 递归提取路由器后台中的所有URL
     # 路由器厂商自己写的登录界面，创建session，POST账号密码
     # pattern用来提取前缀，例如http://192.168.1.1/start.html中的start
     def extract_urls_with_data(self, pattern, data=None, target_url=None, index=True):
@@ -90,6 +92,9 @@ class RouterSpider:
                     self.main_urls.append(url)
                 self.extract_urls_with_data(pattern, target_url=url, index=False)
 
+    # 递归提取路由器后台中的所有URL
+    # 路由器厂商自己写的登录界面，创建session，POST账号密码
+    # pattern用来提取base url后的路径，例如http://192.168.2.1/cgi-bin/luci/admin/index中的cgi-bin/luci/admin/index
     def extract_none_suffix_urls_with_data(self, pattern, data=None, target_url=None, index=True):
         if index:
             res = self.requests_session.post(LOGINURL, data=data)
@@ -144,12 +149,11 @@ class RouterSpider:
                 except:
                     logging.error("Cannot select option by index %s" % i)
 
-    # 处理按钮，需要传入按钮的name，id属性，需要刷新页面时：refresh=True
+    # 处理按钮，需要传入按钮的name或id属性，需要刷新页面时：refresh=True
     def handle_button(self, name=None, id=None, refresh=False):
         button = None
         if name is None and id is None:
             raise ValueError("Name and id can not be left None at same time.")
-
         try:
             if name is not None:
                 button = WebDriverWait(self.browser, 5).until(ec.presence_of_element_located((By.NAME, name)))
@@ -169,6 +173,26 @@ class RouterSpider:
             except:
                 logging.error("Cannot click button")
 
+    #处理输入框，需要传入填充的字符串，输入框的name或id属性
+    def handle_textfield(self, string_to_fill, name=None, id=None):
+        textfield = None
+        if name is None and id is None:
+            raise ValueError("Name and id can not be left None at same time.")
+        try:
+            if name is not None:
+                textfield = WebDriverWait(self.browser, 5).until(ec.presence_of_element_located((By.NAME, name)))
+                logging.debug("Handle textfield named %s" % name)
+            else:
+                textfield = WebDriverWait(self.browser, 5).until(ec.presence_of_element_located((By.ID, id)))
+                logging.debug("Handle textfield id %s" % id)
+        except:
+            logging.error("Cannot locate element.")
+        if textfield is not None:
+            try:
+                textfield.send_keys(string_to_fill)
+            except:
+                logging.error("Cannot enter string")
+
     # 处理Har文件，提取POST请求的信息
     @staticmethod
     def handle_har(har):
@@ -177,7 +201,7 @@ class RouterSpider:
             logging.debug('Capture a POST request.')
             try:
                 post_data = har['log']['entries'][0]['request']['postData']['params']
-                post_url = har['log']['entries'][0]['request']['url']
+                post_url = har['log']['entries'][0]['request']['headers'][-1]['value']
                 print post_data
                 print post_url
             except:
@@ -190,6 +214,8 @@ class RouterSpider:
         self.browser.quit()
 
 if __name__ == '__main__':
+    # PHICOMM使用实例
+    '''
     spider = RouterSpider()
     data = {
         'action_mode': 'apply',
@@ -197,12 +223,11 @@ if __name__ == '__main__':
         'username': 'admin',
         'password': 'MzE2MzE2MzE2'
     }
-    spider.browser.maximize_window()
     spider.webdriver_login('316316316', '//div/input', '/html/body/form/div/div[2]/button')
     spider.proxy.request_interceptor(JSINTERCEPTOR)
+    time.sleep(5)
     time_stamp = re.findall(r'stok=(\w+)/', spider.browser.current_url)[0]
     spider.extract_none_suffix_urls_with_data(r'/(cgi-bin/luci/;stok=\w+/admin/.*?)\"', data, None, True)
-    logging.debug('Extract urls complete.')
     for url in spider.main_urls:
         url = re.sub(r'stok=\w+', 'stok='+time_stamp, url)
         page_source = None
@@ -214,3 +239,44 @@ if __name__ == '__main__':
             for button_id in spider.extract_element(r'.*button.*id="(.*?)".*', page_source):
                 spider.handle_button(id=button_id)
     spider.stop()
+    '''
+
+    # NETGEAR使用实例
+    '''
+    spider = RouterSpider()
+    spider.webdriver_login_with_auth()
+    spider.proxy.request_interceptor(JSINTERCEPTOR)
+    spider.extract_urls_with_auth_headers(r'\"([a-zA-Z0-9_]*)\.')
+    for url in spider.main_urls:
+        page_source = None
+        try:
+            page_source = spider.webdriver_fetchpage(url)
+        except:
+            logging.warning("Timeout when get %s" % url)
+        if page_source is not None:
+            for button_name in spider.extract_element(r'button.*name="(.*?)".*>', page_source):
+                spider.handle_button(name=button_name)
+    spider.stop()
+    '''
+
+    # WNDR4300使用实例
+    '''
+    spider = RouterSpider()
+    spider.webdriver_login_with_auth()
+    spider.proxy.request_interceptor(JSINTERCEPTOR)
+    spider.extract_urls_with_auth_headers(r'\"([a-zA-Z0-9_]*)\.')
+    for url in spider.main_urls:
+        page_source = None
+        try:
+            page_source = spider.webdriver_fetchpage(url)
+        except:
+            logging.warning("Timeout when get %s" % url)
+        if page_source is not None:
+            for selectfield_name in spider.extract_element(r'<select.*name="(.*?)"', page_source)
+                spider.handle_selectfield(name=selectfield_name)
+            for button_name in spider.extract_element(r'<input.*type="button".*name="(.*?)"', page_source)
+                spider.handle_button(name=button_name)
+        spider.stop()
+    '''
+
+

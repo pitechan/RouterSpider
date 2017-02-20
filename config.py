@@ -7,7 +7,8 @@ BROWSERMOBPROXYPATH = '/Users/apple/Downloads/browsermob-proxy-2.1.4/bin/browser
 # browsermobproxy的设置
 PROXYSETTINGS  = {
     "captureHeaders":True,
-    "captureContent":True
+    "captureContent":True,
+    'captureBinaryContent': True
 }
 
 URLSUFFIXLIST = ['.asp', '.js', '.html', '.cgi', '.htm', '.php'] # 用于遍历获取URL，可添加新的后缀
@@ -35,6 +36,14 @@ JSINTERCEPTOR = '''
 request.headers().add('Request-Uri', request.getUri());
 if(request.method() == 'POST')
 {
-	request.setUri('127.0.0.1');
+    request.setUri(request.getUri() + 'unreachable');
 }
 '''
+
+STRTOFILL = [
+    "1.1.1.1",
+    "255.255.254.0",
+    "teststr1",
+    "777",
+    ""
+]
